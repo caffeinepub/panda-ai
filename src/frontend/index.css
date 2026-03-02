@@ -1,0 +1,227 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Panda AI - Figtree for body, Plus Jakarta Sans for headings */
+@font-face {
+  font-family: "Figtree";
+  src: url("/assets/fonts/Figtree[wght].woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("/assets/fonts/PlusJakartaSans[wght].woff2") format("woff2-variations");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/assets/fonts/GeistMono[wght].woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    --radius: 0.75rem;
+
+    /* Panda AI teal-forward palette */
+    --background: 0.99 0 0;
+    --foreground: 0.18 0.01 250;
+    --card: 1 0 0;
+    --card-foreground: 0.18 0.01 250;
+    --popover: 1 0 0;
+    --popover-foreground: 0.18 0.01 250;
+
+    /* Teal primary */
+    --primary: 0.58 0.14 195;
+    --primary-foreground: 1 0 0;
+
+    --secondary: 0.96 0.005 200;
+    --secondary-foreground: 0.3 0.02 220;
+
+    --muted: 0.96 0.003 200;
+    --muted-foreground: 0.52 0.01 240;
+
+    --accent: 0.94 0.03 195;
+    --accent-foreground: 0.45 0.12 195;
+
+    --destructive: 0.577 0.245 27.325;
+    --destructive-foreground: 0.985 0 0;
+
+    --border: 0.91 0.005 200;
+    --input: 0.91 0.005 200;
+    --ring: 0.58 0.14 195;
+
+    /* Sidebar specific */
+    --sidebar: 0.97 0.005 200;
+    --sidebar-foreground: 0.18 0.01 250;
+    --sidebar-primary: 0.58 0.14 195;
+    --sidebar-primary-foreground: 1 0 0;
+    --sidebar-accent: 0.93 0.02 195;
+    --sidebar-accent-foreground: 0.45 0.12 195;
+    --sidebar-border: 0.91 0.005 200;
+    --sidebar-ring: 0.58 0.14 195;
+
+    /* Chart colors */
+    --chart-1: 0.646 0.222 41.116;
+    --chart-2: 0.58 0.14 195;
+    --chart-3: 0.398 0.07 227.392;
+    --chart-4: 0.828 0.189 84.429;
+    --chart-5: 0.769 0.188 70.08;
+
+    /* Panda AI custom tokens */
+    --teal-50: 0.97 0.02 195;
+    --teal-100: 0.93 0.04 195;
+    --teal-200: 0.87 0.07 195;
+    --teal-500: 0.67 0.13 195;
+    --teal-600: 0.58 0.14 195;
+    --teal-700: 0.49 0.12 195;
+    --user-bubble: 0.58 0.14 195;
+    --user-bubble-fg: 1 0 0;
+    --assistant-bubble: 1 0 0;
+    --assistant-bubble-fg: 0.18 0.01 250;
+    --streaming-cursor: 0.58 0.14 195;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  ::selection {
+    background: oklch(0.87 0.07 195 / 0.4);
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.87 0.07 195);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.67 0.13 195);
+  }
+}
+
+@layer utilities {
+  /* Streaming cursor blink animation */
+  .streaming-cursor::after {
+    content: "▋";
+    color: oklch(var(--streaming-cursor));
+    animation: blink 0.8s step-end infinite;
+    margin-left: 1px;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* Message fade in animation */
+  .message-enter {
+    animation: messageEnter 0.25s ease-out forwards;
+  }
+
+  @keyframes messageEnter {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Code block highlight.js overrides */
+  .hljs {
+    background: oklch(0.13 0.01 250) !important;
+    color: oklch(0.92 0.01 240) !important;
+    border-radius: 0.5rem;
+    padding: 1rem 1.25rem;
+    font-family: "Geist Mono", monospace;
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    overflow-x: auto;
+  }
+
+  .prose pre {
+    padding: 0 !important;
+    background: transparent !important;
+    margin: 0.75rem 0 !important;
+  }
+
+  .prose pre code {
+    background: transparent !important;
+    padding: 0 !important;
+    font-size: inherit !important;
+  }
+
+  .prose code:not(pre code) {
+    background: oklch(0.93 0.03 195);
+    color: oklch(0.45 0.12 195);
+    padding: 0.1em 0.35em;
+    border-radius: 0.25rem;
+    font-size: 0.875em;
+    font-family: "Geist Mono", monospace;
+  }
+
+  .prose p {
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+  }
+
+  .prose ul, .prose ol {
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
+    padding-left: 1.5em;
+  }
+
+  .prose li {
+    margin-top: 0.25em;
+    margin-bottom: 0.25em;
+  }
+
+  .prose h1, .prose h2, .prose h3 {
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 700;
+    margin-top: 1em;
+    margin-bottom: 0.4em;
+    color: oklch(0.18 0.01 250);
+  }
+
+  .prose table {
+    font-size: 0.875em;
+  }
+
+  .prose blockquote {
+    border-left: 3px solid oklch(0.87 0.07 195);
+    color: oklch(0.45 0.01 240);
+    padding-left: 1em;
+    font-style: italic;
+  }
+
+  /* Sidebar transition */
+  .sidebar-transition {
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+                width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
