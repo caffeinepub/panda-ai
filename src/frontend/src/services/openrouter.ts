@@ -197,6 +197,25 @@ const SYSTEM_PROMPT: OpenRouterMessage = {
     "You are Panda AI, a helpful assistant. Always respond in English only, regardless of what language the user writes in, unless the user explicitly asks you to respond in a different language. Never switch to Chinese, Japanese, or any other language by default.",
 };
 
+// Check if a model supports vision/image input based on its metadata
+export function modelSupportsVision(model: Model | undefined): boolean {
+  if (!model) return false;
+  const modality = model.architecture?.modality || "";
+  return (
+    modality.includes("image") ||
+    model.id.includes("vision") ||
+    model.id.includes("-vl") ||
+    model.id.includes("gpt-4o") ||
+    model.id.includes("claude-3") ||
+    model.id.includes("gemini") ||
+    model.id.includes("pixtral") ||
+    model.id.includes("llava") ||
+    model.id.includes("minicpm-v") ||
+    model.name.toLowerCase().includes("vision") ||
+    model.name.toLowerCase().includes("vl")
+  );
+}
+
 export async function* streamChat(
   apiKey: string,
   model: string,
@@ -243,6 +262,17 @@ export async function* streamChat(
       );
     }
     if (response.status === 400) {
+      // Check if it's an image-related error
+      if (
+        msg.toLowerCase().includes("image") ||
+        msg.toLowerCase().includes("vision") ||
+        msg.toLowerCase().includes("modality") ||
+        msg.toLowerCase().includes("endpoint")
+      ) {
+        throw new Error(
+          `The selected model "${model}" does not support image input. Please switch to a vision-capable model (e.g. Gemini or Llama Vision).`,
+        );
+      }
       throw new Error(
         `This model doesn't support the request format. Try a different model.`,
       );
@@ -250,6 +280,15 @@ export async function* streamChat(
     if (response.status === 503 || response.status === 502) {
       throw new Error(
         `Model "${model}" is currently unavailable. Please try a different model.`,
+      );
+    }
+    // Check for "no endpoints" type error in the message
+    if (
+      msg.toLowerCase().includes("no endpoints") ||
+      msg.toLowerCase().includes("image input")
+    ) {
+      throw new Error(
+        "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini or Llama Vision).",
       );
     }
     throw new Error(msg);
@@ -274,11 +313,33 @@ export async function* streamChat(
         try {
           const parsed = JSON.parse(data) as {
             choices?: Array<{ delta?: { content?: string } }>;
+            error?: { message?: string; code?: number };
           };
+          // Handle error returned inside the stream
+          if (parsed.error) {
+            const errMsg = parsed.error.message || "Unknown error";
+            if (
+              errMsg.toLowerCase().includes("no endpoints") ||
+              errMsg.toLowerCase().includes("image input") ||
+              errMsg.toLowerCase().includes("vision") ||
+              errMsg.toLowerCase().includes("modality")
+            ) {
+              throw new Error(
+                "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini Flash or Llama Vision).",
+              );
+            }
+            throw new Error(errMsg);
+          }
           const content = parsed.choices?.[0]?.delta?.content;
           if (content) yield content;
-        } catch {
-          // skip malformed chunks
+        } catch (e) {
+          // Re-throw actual errors, skip malformed JSON chunks
+          if (
+            e instanceof Error &&
+            e.message !== "Unexpected end of JSON input"
+          ) {
+            throw e;
+          }
         }
       }
     }

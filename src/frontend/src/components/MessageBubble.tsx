@@ -1,8 +1,3 @@
-import { useCallback, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import rehypeHighlight from "rehype-highlight";
-import remarkGfm from "remark-gfm";
-import "highlight.js/styles/github-dark.css";
 import {
   AlertCircle,
   Check,
@@ -11,6 +6,7 @@ import {
   Image as ImageIcon,
   User,
 } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
 import type { ContentPart, Message } from "../hooks/useChatStore";
 
 interface MessageBubbleProps {
@@ -60,33 +56,433 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-// Code block with copy button
-function CodeBlock({
-  children,
-  className,
-}: {
-  children?: React.ReactNode;
-  className?: string;
-}) {
-  const codeText = typeof children === "string" ? children : "";
-  const isInline = !className;
+// ─── Lightweight Markdown Renderer ───────────────────────────────────────────
+// Parses common markdown patterns without external deps.
 
-  if (isInline) {
-    return <code className={className}>{children}</code>;
+interface MarkdownToken {
+  type:
+    | "heading"
+    | "code_block"
+    | "blockquote"
+    | "hr"
+    | "ul_item"
+    | "ol_item"
+    | "table"
+    | "paragraph"
+    | "blank";
+  content: string;
+  level?: number; // for headings
+  ordered?: boolean;
+  lang?: string; // for code blocks
+  rows?: string[][]; // for tables
+  headers?: string[]; // for tables
+}
+
+function tokenizeMarkdown(md: string): MarkdownToken[] {
+  const lines = md.split("\n");
+  const tokens: MarkdownToken[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Fenced code block
+    if (/^```/.test(line)) {
+      const lang = line.slice(3).trim();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++; // consume closing ```
+      tokens.push({ type: "code_block", content: codeLines.join("\n"), lang });
+      continue;
+    }
+
+    // Heading
+    const headingMatch = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (headingMatch) {
+      tokens.push({
+        type: "heading",
+        level: headingMatch[1].length,
+        content: headingMatch[2],
+      });
+      i++;
+      continue;
+    }
+
+    // HR
+    if (/^[-*_]{3,}\s*$/.test(line)) {
+      tokens.push({ type: "hr", content: "" });
+      i++;
+      continue;
+    }
+
+    // Blockquote
+    if (/^>\s?/.test(line)) {
+      const bqLines: string[] = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        bqLines.push(lines[i].replace(/^>\s?/, ""));
+        i++;
+      }
+      tokens.push({ type: "blockquote", content: bqLines.join("\n") });
+      continue;
+    }
+
+    // Unordered list
+    if (/^[-*+]\s/.test(line)) {
+      const itemLines: string[] = [];
+      while (i < lines.length && /^[-*+]\s/.test(lines[i])) {
+        itemLines.push(lines[i].replace(/^[-*+]\s/, ""));
+        i++;
+      }
+      for (const item of itemLines) {
+        tokens.push({ type: "ul_item", content: item });
+      }
+      continue;
+    }
+
+    // Ordered list
+    if (/^\d+\.\s/.test(line)) {
+      const itemLines: string[] = [];
+      while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
+        itemLines.push(lines[i].replace(/^\d+\.\s/, ""));
+        i++;
+      }
+      for (const item of itemLines) {
+        tokens.push({ type: "ol_item", content: item });
+      }
+      continue;
+    }
+
+    // Table (pipe-separated)
+    if (
+      /\|/.test(line) &&
+      i + 1 < lines.length &&
+      /^\|?[-:| ]+\|?$/.test(lines[i + 1])
+    ) {
+      const parseRow = (r: string) =>
+        r
+          .replace(/^\||\|$/g, "")
+          .split("|")
+          .map((c) => c.trim());
+      const headers = parseRow(line);
+      i += 2; // skip separator row
+      const rows: string[][] = [];
+      while (i < lines.length && /\|/.test(lines[i])) {
+        rows.push(parseRow(lines[i]));
+        i++;
+      }
+      tokens.push({ type: "table", content: "", headers, rows });
+      continue;
+    }
+
+    // Blank line
+    if (/^\s*$/.test(line)) {
+      tokens.push({ type: "blank", content: "" });
+      i++;
+      continue;
+    }
+
+    // Paragraph – accumulate consecutive non-special lines
+    const paraLines: string[] = [];
+    while (
+      i < lines.length &&
+      !/^\s*$/.test(lines[i]) &&
+      !/^```/.test(lines[i]) &&
+      !/^#{1,6}\s/.test(lines[i]) &&
+      !/^[-*+]\s/.test(lines[i]) &&
+      !/^\d+\.\s/.test(lines[i]) &&
+      !/^>\s?/.test(lines[i]) &&
+      !/^[-*_]{3,}\s*$/.test(lines[i])
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    if (paraLines.length > 0) {
+      tokens.push({ type: "paragraph", content: paraLines.join("\n") });
+    }
   }
 
+  return tokens;
+}
+
+// Render inline markdown: bold, italic, inline code, links, strikethrough
+function InlineMarkdown({ text }: { text: string }) {
+  const parts = useMemo(() => {
+    const result: React.ReactNode[] = [];
+    // Split on inline code first
+    const segments = text.split(/(`[^`]+`)/);
+    let key = 0;
+
+    for (const seg of segments) {
+      if (seg.startsWith("`") && seg.endsWith("`") && seg.length > 2) {
+        result.push(
+          <code
+            key={key++}
+            className="px-1.5 py-0.5 rounded bg-zinc-100 text-teal-700 font-mono text-[0.85em] border border-zinc-200"
+          >
+            {seg.slice(1, -1)}
+          </code>,
+        );
+      } else {
+        // Process bold/italic/strikethrough/links inside non-code segments
+        const inner = seg
+          .replace(
+            /\[([^\]]+)\]\(([^)]+)\)/g,
+            '<a href="$2" target="_blank" rel="noopener" class="text-teal-600 underline hover:text-teal-800">$1</a>',
+          )
+          .replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>")
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+          .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+          .replace(/~~([^~]+)~~/g, "<del>$1</del>")
+          .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+          .replace(/_([^_]+)_/g, "<em>$1</em>");
+
+        result.push(
+          <span
+            key={key++}
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: controlled markdown-to-HTML conversion
+            dangerouslySetInnerHTML={{ __html: inner }}
+          />,
+        );
+      }
+    }
+
+    return result;
+  }, [text]);
+
+  return <>{parts}</>;
+}
+
+interface MarkdownProps {
+  children: string;
+  isStreaming?: boolean;
+}
+
+function Markdown({ children, isStreaming }: MarkdownProps) {
+  const tokens = useMemo(() => tokenizeMarkdown(children), [children]);
+
+  // Build stable keys using token type + position — position is stable for
+  // a given markdown string (these are never reordered at runtime).
+  const makeKey = (type: string, idx: number) => `${type}-${idx}`;
+
+  const elements: React.ReactNode[] = [];
+  let ulItems: string[] = [];
+  let olItems: string[] = [];
+
+  const flushUl = (k: number) => {
+    if (ulItems.length === 0) return null;
+    const captured = [...ulItems];
+    ulItems = [];
+    return (
+      <ul key={`ul-${k}`} className="list-disc list-inside space-y-1 my-2 ml-2">
+        {captured.map((item, j) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static parsed list — never reordered
+          <li key={`li-${k}-${j}`} className="text-sm leading-relaxed">
+            <InlineMarkdown text={item} />
+          </li>
+        ))}
+      </ul>
+    );
+  };
+
+  const flushOl = (k: number) => {
+    if (olItems.length === 0) return null;
+    const captured = [...olItems];
+    olItems = [];
+    return (
+      <ol
+        key={`ol-${k}`}
+        className="list-decimal list-inside space-y-1 my-2 ml-2"
+      >
+        {captured.map((item, j) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static parsed list — never reordered
+          <li key={`oli-${k}-${j}`} className="text-sm leading-relaxed">
+            <InlineMarkdown text={item} />
+          </li>
+        ))}
+      </ol>
+    );
+  };
+
+  tokens.forEach((token, idx) => {
+    if (token.type !== "ul_item" && ulItems.length > 0) {
+      const el = flushUl(idx);
+      if (el) elements.push(el);
+    }
+    if (token.type !== "ol_item" && olItems.length > 0) {
+      const el = flushOl(idx);
+      if (el) elements.push(el);
+    }
+
+    const k = makeKey(token.type, idx);
+
+    switch (token.type) {
+      case "heading": {
+        const sizeMap: Record<number, string> = {
+          1: "text-xl font-bold mt-4 mb-2",
+          2: "text-lg font-bold mt-3 mb-2",
+          3: "text-base font-semibold mt-3 mb-1",
+          4: "text-sm font-semibold mt-2 mb-1",
+          5: "text-sm font-medium mt-2 mb-1",
+          6: "text-xs font-medium mt-1 mb-1",
+        };
+        const lvl = token.level ?? 1;
+        const cls = sizeMap[lvl] ?? "font-bold";
+        const hc = <InlineMarkdown text={token.content} />;
+        elements.push(
+          lvl === 1 ? (
+            <h1 key={k} className={cls}>
+              {hc}
+            </h1>
+          ) : lvl === 2 ? (
+            <h2 key={k} className={cls}>
+              {hc}
+            </h2>
+          ) : lvl === 3 ? (
+            <h3 key={k} className={cls}>
+              {hc}
+            </h3>
+          ) : lvl === 4 ? (
+            <h4 key={k} className={cls}>
+              {hc}
+            </h4>
+          ) : lvl === 5 ? (
+            <h5 key={k} className={cls}>
+              {hc}
+            </h5>
+          ) : (
+            <h6 key={k} className={cls}>
+              {hc}
+            </h6>
+          ),
+        );
+        break;
+      }
+
+      case "code_block": {
+        elements.push(
+          <div
+            key={k}
+            className="relative group rounded-xl overflow-hidden my-3 border border-zinc-700/50"
+          >
+            <div className="flex items-center justify-between px-4 py-2 bg-zinc-800/90 border-b border-zinc-700/50">
+              <span className="text-xs text-zinc-400 font-mono">
+                {token.lang || "code"}
+              </span>
+              <CopyButton text={token.content.trim()} />
+            </div>
+            <pre className="bg-zinc-900 px-4 py-3 overflow-x-auto text-xs leading-relaxed">
+              <code className="text-zinc-100 font-mono">{token.content}</code>
+            </pre>
+          </div>,
+        );
+        break;
+      }
+
+      case "blockquote":
+        elements.push(
+          <blockquote
+            key={k}
+            className="border-l-4 border-teal-400 pl-4 my-2 text-sm italic text-zinc-600 bg-zinc-50 py-1 rounded-r-md"
+          >
+            <InlineMarkdown text={token.content} />
+          </blockquote>,
+        );
+        break;
+
+      case "hr":
+        elements.push(<hr key={k} className="border-zinc-200 my-4" />);
+        break;
+
+      case "ul_item":
+        ulItems.push(token.content);
+        break;
+
+      case "ol_item":
+        olItems.push(token.content);
+        break;
+
+      case "table": {
+        const { headers = [], rows = [] } = token;
+        elements.push(
+          <div key={k} className="overflow-x-auto my-3">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-zinc-100">
+                  {headers.map((h, j) => {
+                    const thKey = `${k}-th-${j}`;
+                    return (
+                      <th
+                        key={thKey}
+                        className="border border-zinc-300 px-3 py-1.5 text-left font-semibold text-xs"
+                      >
+                        <InlineMarkdown text={h} />
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, ri) => {
+                  const trKey = `${k}-tr-${ri}`;
+                  return (
+                    <tr key={trKey} className="even:bg-zinc-50">
+                      {row.map((cell, ci) => {
+                        const tdKey = `${k}-td-${ri}-${ci}`;
+                        return (
+                          <td
+                            key={tdKey}
+                            className="border border-zinc-300 px-3 py-1.5 text-xs"
+                          >
+                            <InlineMarkdown text={cell} />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>,
+        );
+        break;
+      }
+
+      case "paragraph":
+        if (token.content.trim()) {
+          elements.push(
+            <p key={k} className="text-sm leading-relaxed my-1.5">
+              <InlineMarkdown text={token.content} />
+            </p>,
+          );
+        }
+        break;
+
+      case "blank":
+        break;
+
+      default:
+        break;
+    }
+  });
+
+  // Flush any trailing list items
+  const ulEl = flushUl(tokens.length);
+  if (ulEl) elements.push(ulEl);
+  const olEl = flushOl(tokens.length + 1);
+  if (olEl) elements.push(olEl);
+
   return (
-    <div className="relative group rounded-xl overflow-hidden my-3 border border-zinc-700/50">
-      <div className="flex items-center justify-between px-4 py-2 bg-zinc-800/80 border-b border-zinc-700/50">
-        <span className="text-xs text-zinc-400 font-mono">
-          {className?.replace("hljs language-", "") || "code"}
-        </span>
-        <CopyButton text={codeText.trim()} />
-      </div>
-      <code className={className}>{children}</code>
+    <div className={`min-w-0 ${isStreaming ? "streaming-cursor" : ""}`}>
+      {elements}
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function AttachmentPreview({ part }: { part: ContentPart }) {
   if (part.type === "image_url" && part.image_url) {
@@ -122,13 +518,6 @@ function AttachmentPreview({ part }: { part: ContentPart }) {
   return null;
 }
 
-type PreProps = React.HTMLAttributes<HTMLPreElement> & {
-  children?: React.ReactNode;
-};
-function PassthroughPre({ children }: PreProps) {
-  return <>{children}</>;
-}
-
 function MessageContent({ message }: { message: Message }) {
   const content = message.content;
 
@@ -140,26 +529,7 @@ function MessageContent({ message }: { message: Message }) {
     }
 
     // Assistant message with markdown
-    return (
-      <div
-        className={`prose prose-sm max-w-none text-foreground ${
-          message.isStreaming ? "streaming-cursor" : ""
-        }`}
-      >
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight]}
-          components={{
-            code: ({ className, children }) => (
-              <CodeBlock className={className}>{children}</CodeBlock>
-            ),
-            pre: PassthroughPre,
-          }}
-        >
-          {content}
-        </ReactMarkdown>
-      </div>
-    );
+    return <Markdown isStreaming={message.isStreaming}>{content}</Markdown>;
   }
 
   // Content parts

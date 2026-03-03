@@ -14,6 +14,7 @@ import {
   type OpenRouterContentPart,
   type OpenRouterMessage,
   fetchFreeModels,
+  modelSupportsVision,
   selectBestModel,
   streamChat,
 } from "../services/openrouter";
@@ -407,10 +408,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     // Determine model to use
     const availableModels = models.length > 0 ? models : FALLBACK_MODELS;
-    const modelToUse =
+    let modelToUse =
       selectedModel === "auto"
         ? selectBestModel(availableModels, text, hasImage, hasDocument)
         : selectedModel;
+
+    // If image attached and selected model doesn't support vision, auto-switch to a vision model
+    if (hasImage && selectedModel !== "auto") {
+      const selectedModelObj = availableModels.find(
+        (m) => m.id === selectedModel,
+      );
+      if (!modelSupportsVision(selectedModelObj)) {
+        // Find a free vision model
+        const visionModel = availableModels.find((m) => modelSupportsVision(m));
+        if (visionModel) {
+          modelToUse = visionModel.id;
+          toast.info(
+            `Switched to ${visionModel.name} for image support. Your selected model doesn't support images.`,
+            { duration: 4000 },
+          );
+        }
+      }
+    }
 
     // Create assistant placeholder message
     const assistantMessageId = generateId();
@@ -427,33 +446,50 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "SET_STREAMING", payload: true });
 
     try {
-      // Build OpenRouter messages
+      // Build OpenRouter messages - strip image data from history to keep payloads small
       const updatedChat = stateRef.current.chats.find((c) => c.id === chatId);
       const history = updatedChat?.messages || [];
-      const apiMessages: OpenRouterMessage[] = history
-        .filter((m) => m.id !== assistantMessageId && !m.isStreaming)
-        .map((m): OpenRouterMessage => {
+
+      // Keep last N text messages for context (avoid sending huge history)
+      // Images from old messages are stripped - only current message images are sent
+      const MAX_HISTORY_MESSAGES = 20;
+      const historyMessages = history.filter(
+        (m) => m.id !== assistantMessageId && !m.isStreaming,
+      );
+      // Always include all messages but strip images from non-recent ones
+      const recentCutoff = historyMessages.length - MAX_HISTORY_MESSAGES;
+
+      const apiMessages: OpenRouterMessage[] = historyMessages.map(
+        (m, idx): OpenRouterMessage => {
           if (typeof m.content === "string") {
             return { role: m.role as "user" | "assistant", content: m.content };
           }
-          // Convert ContentPart[] to OpenRouterContentPart[]
-          const parts: OpenRouterContentPart[] = m.content
-            .filter(
-              (p): p is ContentPart & { type: "text" | "image_url" } =>
-                p.type === "text" || p.type === "image_url",
-            )
-            .map((p) => {
-              if (p.type === "image_url" && p.image_url) {
-                return { type: "image_url", image_url: p.image_url };
-              }
-              return { type: "text", text: p.text || "" };
-            });
 
-          // For document parts, include the text content
-          const docParts = m.content.filter((p) => p.type === "document");
-          for (const dp of docParts) {
-            if (dp.text) {
-              parts.push({ type: "text", text: dp.text });
+          const isRecent = idx >= recentCutoff;
+          const isCurrentUserMessage = m.id === userMessage.id;
+
+          // Convert ContentPart[] to OpenRouterContentPart[]
+          const parts: OpenRouterContentPart[] = [];
+
+          for (const p of m.content) {
+            if (p.type === "image_url" && p.image_url) {
+              // Only include image data for the current message or recent messages with vision model
+              if (isCurrentUserMessage || isRecent) {
+                parts.push({ type: "image_url", image_url: p.image_url });
+              } else {
+                // Replace old images with a text placeholder to keep history compact
+                parts.push({
+                  type: "text",
+                  text: `[Image: ${p.fileName || "image"} - content not repeated]`,
+                });
+              }
+            } else if (p.type === "text") {
+              parts.push({ type: "text", text: p.text || "" });
+            } else if (p.type === "document") {
+              // For document parts, include the text content
+              if (p.text) {
+                parts.push({ type: "text", text: p.text });
+              }
             }
           }
 
@@ -461,7 +497,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             role: m.role as "user" | "assistant",
             content: parts.length > 0 ? parts : "",
           };
-        });
+        },
+      );
 
       // Stream the response
       for await (const chunk of streamChat(apiKey, modelToUse, apiMessages)) {
