@@ -277,6 +277,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     stateRef.current = state;
   });
 
+  // Holds the AbortController for the current in-flight stream
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const activeChat =
     state.chats.find((c) => c.id === state.activeChatId) || null;
 
@@ -445,6 +448,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "ADD_MESSAGE", chatId, message: assistantMessage });
     dispatch({ type: "SET_STREAMING", payload: true });
 
+    // Cancel any previous in-flight request immediately
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     try {
       // Build OpenRouter messages - strip image data from history to keep payloads small
       const updatedChat = stateRef.current.chats.find((c) => c.id === chatId);
@@ -501,7 +511,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       );
 
       // Stream the response
-      for await (const chunk of streamChat(apiKey, modelToUse, apiMessages)) {
+      for await (const chunk of streamChat(
+        apiKey,
+        modelToUse,
+        apiMessages,
+        abortController.signal,
+      )) {
         dispatch({
           type: "UPDATE_LAST_MESSAGE",
           chatId,
@@ -516,6 +531,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         model: modelToUse,
       });
     } catch (err) {
+      // Ignore aborted requests - user started a new message or switched chats
+      if (err instanceof Error && err.name === "AbortError") {
+        dispatch({
+          type: "SET_MESSAGE_ERROR",
+          chatId,
+          messageId: assistantMessageId,
+          error: "",
+        });
+        return;
+      }
+
       const errMsg = err instanceof Error ? err.message : "An error occurred";
       const isRateLimit =
         errMsg.toLowerCase().includes("rate limit") ||
@@ -538,6 +564,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
     } finally {
       dispatch({ type: "SET_STREAMING", payload: false });
+      // Clear the controller ref if it's still ours
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null;
+      }
     }
   }, []);
 

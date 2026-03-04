@@ -563,7 +563,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     minute: "2-digit",
   });
 
-  if (message.error) {
+  // Silently skip empty error messages (e.g. from aborted requests)
+  if (message.error !== undefined) {
+    if (!message.error) return null;
     return (
       <div className="flex justify-start px-4 mb-4 message-enter">
         <div className="flex items-start gap-3 max-w-[80%] md:max-w-[70%]">

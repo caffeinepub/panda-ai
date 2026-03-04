@@ -155,15 +155,7 @@ export function selectBestModel(
 
   // Vision request: prefer multimodal models
   if (hasImage) {
-    const visionModel = models.find(
-      (m) =>
-        m.architecture?.modality?.includes("image") ||
-        m.id.includes("vision") ||
-        m.id.includes("vl") ||
-        m.name.toLowerCase().includes("vision") ||
-        m.id.includes("claude-3") ||
-        m.id.includes("gemini"),
-    );
+    const visionModel = models.find((m) => modelSupportsVision(m));
     if (visionModel) return visionModel.id;
   }
 
@@ -197,22 +189,50 @@ const SYSTEM_PROMPT: OpenRouterMessage = {
     "You are Panda AI, a helpful assistant. Always respond in English only, regardless of what language the user writes in, unless the user explicitly asks you to respond in a different language. Never switch to Chinese, Japanese, or any other language by default.",
 };
 
+const VISION_ID_PATTERNS = [
+  "vision",
+  "-vl",
+  "vl-",
+  "gpt-4o",
+  "claude-3",
+  "gemini",
+  "pixtral",
+  "llava",
+  "minicpm-v",
+  "qwen-vl",
+  "qvq",
+  "qwen2-vl",
+  "internvl",
+  "moondream",
+  "phi-3-vision",
+  "phi3-vision",
+  "idefics",
+  "cogvlm",
+  "deepseek-vl",
+  "molmo",
+  "aria",
+  "ovis",
+  "llama-3.2-11b-vision",
+  "llama-3.2-90b-vision",
+  "llama3.2-vision",
+  "free-vision",
+];
+
 // Check if a model supports vision/image input based on its metadata
 export function modelSupportsVision(model: Model | undefined): boolean {
   if (!model) return false;
   const modality = model.architecture?.modality || "";
+  if (modality.includes("image")) return true;
+
+  const idLower = model.id.toLowerCase();
+  const nameLower = model.name.toLowerCase();
+
   return (
-    modality.includes("image") ||
-    model.id.includes("vision") ||
-    model.id.includes("-vl") ||
-    model.id.includes("gpt-4o") ||
-    model.id.includes("claude-3") ||
-    model.id.includes("gemini") ||
-    model.id.includes("pixtral") ||
-    model.id.includes("llava") ||
-    model.id.includes("minicpm-v") ||
-    model.name.toLowerCase().includes("vision") ||
-    model.name.toLowerCase().includes("vl")
+    VISION_ID_PATTERNS.some((p) => idLower.includes(p)) ||
+    nameLower.includes("vision") ||
+    nameLower.includes("visual") ||
+    nameLower.includes(" vl") ||
+    nameLower.includes("multimodal")
   );
 }
 
@@ -220,6 +240,7 @@ export async function* streamChat(
   apiKey: string,
   model: string,
   messages: OpenRouterMessage[],
+  signal?: AbortSignal,
 ): AsyncGenerator<string> {
   // Prepend system prompt if not already present
   const hasSystemMessage = messages.some((m) => m.role === "system");
@@ -240,6 +261,7 @@ export async function* streamChat(
       messages: messagesWithSystem,
       stream: true,
     }),
+    signal,
   });
 
   if (!response.ok) {
