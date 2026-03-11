@@ -64,7 +64,12 @@ type ChatAction =
   | { type: "DELETE_CHAT"; payload: string }
   | { type: "SET_ACTIVE_CHAT"; payload: string | null }
   | { type: "ADD_MESSAGE"; chatId: string; message: Message }
-  | { type: "UPDATE_LAST_MESSAGE"; chatId: string; delta: string }
+  | {
+      type: "UPDATE_LAST_MESSAGE";
+      chatId: string;
+      messageId: string;
+      delta: string;
+    }
   | {
       type: "FINALIZE_MESSAGE";
       chatId: string;
@@ -77,6 +82,7 @@ type ChatAction =
       messageId: string;
       error: string;
     }
+  | { type: "REMOVE_MESSAGE"; chatId: string; messageId: string }
   | { type: "SET_CHAT_TITLE"; chatId: string; title: string }
   | { type: "SET_MODELS"; payload: Model[] }
   | { type: "SET_LOADING_MODELS"; payload: boolean }
@@ -149,18 +155,15 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "UPDATE_LAST_MESSAGE": {
       const updatedChats = state.chats.map((chat) => {
         if (chat.id !== action.chatId) return chat;
-        const messages = [...chat.messages];
-        const lastIdx = messages.length - 1;
-        if (lastIdx < 0) return chat;
-        const last = messages[lastIdx];
-        if (last.role !== "assistant") return chat;
-        const currentContent =
-          typeof last.content === "string" ? last.content : "";
-        messages[lastIdx] = {
-          ...last,
-          content: currentContent + action.delta,
-          isStreaming: true,
-        };
+        const messages = chat.messages.map((m) => {
+          if (m.id !== action.messageId) return m;
+          const currentContent = typeof m.content === "string" ? m.content : "";
+          return {
+            ...m,
+            content: currentContent + action.delta,
+            isStreaming: true,
+          };
+        });
         return { ...chat, messages };
       });
       return { ...state, chats: updatedChats };
@@ -189,6 +192,18 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : m,
         );
         return { ...chat, messages };
+      });
+      localStorage.setItem("panda_chats", JSON.stringify(updatedChats));
+      return { ...state, chats: updatedChats };
+    }
+
+    case "REMOVE_MESSAGE": {
+      const updatedChats = state.chats.map((chat) => {
+        if (chat.id !== action.chatId) return chat;
+        return {
+          ...chat,
+          messages: chat.messages.filter((m) => m.id !== action.messageId),
+        };
       });
       localStorage.setItem("panda_chats", JSON.stringify(updatedChats));
       return { ...state, chats: updatedChats };
@@ -279,6 +294,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // Holds the AbortController for the current in-flight stream
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Monotonically increasing request counter - used to discard stale stream chunks
+  const requestIdRef = useRef<number>(0);
 
   const activeChat =
     state.chats.find((c) => c.id === state.activeChatId) || null;
@@ -385,6 +402,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const hasImage = imageFiles.length > 0;
     const hasDocument = docFiles.length > 0;
 
+    // Cancel any previous in-flight stream IMMEDIATELY before doing anything else
+    // This ensures the old stream stops before we add the new messages
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
     // Create user message
     const userMessage: Message = {
       id: generateId(),
@@ -396,11 +420,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       timestamp: Date.now(),
     };
 
+    // Build the history BEFORE dispatching, then append the new user message locally.
+    // This guarantees the API always gets the full up-to-date context without relying
+    // on stateRef catching a dispatch that hasn't flushed yet.
+    const existingChat = chats.find((c) => c.id === chatId);
+    const existingMessages: Message[] = existingChat?.messages
+      ? existingChat.messages.filter((m) => !m.isStreaming)
+      : [];
+    // The full message list for building the API payload = existing history + new user message
+    const allMessagesForApi: Message[] = [...existingMessages, userMessage];
+
     dispatch({ type: "ADD_MESSAGE", chatId, message: userMessage });
 
     // Auto-generate title from first message
-    const currentChat = stateRef.current.chats.find((c) => c.id === chatId);
-    if (currentChat && currentChat.messages.length === 0) {
+    if (existingMessages.length === 0) {
       const titleText = text.slice(0, 40).replace(/\n/g, " ");
       dispatch({
         type: "SET_CHAT_TITLE",
@@ -448,67 +481,89 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "ADD_MESSAGE", chatId, message: assistantMessage });
     dispatch({ type: "SET_STREAMING", payload: true });
 
-    // Cancel any previous in-flight request immediately
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    // Assign a unique ID to this request - any chunk from a superseded request is silently dropped
+    requestIdRef.current += 1;
+    const thisRequestId = requestIdRef.current;
+
     try {
-      // Build OpenRouter messages - strip image data from history to keep payloads small
-      const updatedChat = stateRef.current.chats.find((c) => c.id === chatId);
-      const history = updatedChat?.messages || [];
-
-      // Keep last N text messages for context (avoid sending huge history)
-      // Images from old messages are stripped - only current message images are sent
+      // Build OpenRouter messages from the local snapshot (not stateRef) so the
+      // new user message is always present, regardless of React batching.
       const MAX_HISTORY_MESSAGES = 20;
-      const historyMessages = history.filter(
-        (m) => m.id !== assistantMessageId && !m.isStreaming,
-      );
-      // Always include all messages but strip images from non-recent ones
-      const recentCutoff = historyMessages.length - MAX_HISTORY_MESSAGES;
+      const recentCutoff = allMessagesForApi.length - MAX_HISTORY_MESSAGES;
 
-      const apiMessages: OpenRouterMessage[] = historyMessages.map(
-        (m, idx): OpenRouterMessage => {
-          if (typeof m.content === "string") {
-            return { role: m.role as "user" | "assistant", content: m.content };
-          }
+      // Helper: convert a single ContentPart[] message to OpenRouterContentPart[],
+      // stripping heavy image data from old messages to keep payloads small.
+      const convertParts = (
+        parts: ContentPart[],
+        isCurrentMsg: boolean,
+        isRecent: boolean,
+      ): OpenRouterContentPart[] | string => {
+        const converted: OpenRouterContentPart[] = [];
+        let hasNonText = false;
 
-          const isRecent = idx >= recentCutoff;
-          const isCurrentUserMessage = m.id === userMessage.id;
-
-          // Convert ContentPart[] to OpenRouterContentPart[]
-          const parts: OpenRouterContentPart[] = [];
-
-          for (const p of m.content) {
-            if (p.type === "image_url" && p.image_url) {
-              // Only include image data for the current message or recent messages with vision model
-              if (isCurrentUserMessage || isRecent) {
-                parts.push({ type: "image_url", image_url: p.image_url });
-              } else {
-                // Replace old images with a text placeholder to keep history compact
-                parts.push({
-                  type: "text",
-                  text: `[Image: ${p.fileName || "image"} - content not repeated]`,
-                });
-              }
-            } else if (p.type === "text") {
-              parts.push({ type: "text", text: p.text || "" });
-            } else if (p.type === "document") {
-              // For document parts, include the text content
-              if (p.text) {
-                parts.push({ type: "text", text: p.text });
-              }
+        for (const p of parts) {
+          if (p.type === "image_url" && p.image_url) {
+            hasNonText = true;
+            if (isCurrentMsg || isRecent) {
+              converted.push({ type: "image_url", image_url: p.image_url });
+            } else {
+              converted.push({
+                type: "text",
+                text: `[Image: ${p.fileName || "image"} - not repeated]`,
+              });
             }
+          } else if (p.type === "text") {
+            converted.push({ type: "text", text: p.text || "" });
+          } else if (p.type === "document" && p.text) {
+            converted.push({ type: "text", text: p.text });
+          }
+        }
+
+        // If all parts are plain text with no images, collapse to a string.
+        // Many models (e.g. StepFun, Mistral) reject array content when no images are present.
+        if (!hasNonText) {
+          return converted.map((p) => p.text ?? "").join("\n");
+        }
+
+        return converted.length > 0 ? converted : "";
+      };
+
+      // Always prepend a system message so the model knows who it is and what to do.
+      const systemMessage: OpenRouterMessage = {
+        role: "system",
+        content:
+          "You are Panda AI, a helpful conversational assistant. " +
+          "Always respond ONLY to the user's most recent message. " +
+          "Never answer a previous question unless explicitly asked again.",
+      };
+
+      const historyApiMessages: OpenRouterMessage[] = allMessagesForApi.map(
+        (m, idx): OpenRouterMessage => {
+          const isCurrentMsg = m.id === userMessage.id;
+          const isRecent = idx >= recentCutoff;
+
+          if (typeof m.content === "string") {
+            return {
+              role: m.role as "user" | "assistant",
+              content: m.content,
+            };
           }
 
+          const content = convertParts(m.content, isCurrentMsg, isRecent);
           return {
             role: m.role as "user" | "assistant",
-            content: parts.length > 0 ? parts : "",
+            content,
           };
         },
       );
+
+      const apiMessages: OpenRouterMessage[] = [
+        systemMessage,
+        ...historyApiMessages,
+      ];
 
       // Stream the response
       for await (const chunk of streamChat(
@@ -517,12 +572,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         apiMessages,
         abortController.signal,
       )) {
+        // If a newer request has started, stop processing this stale stream immediately
+        if (requestIdRef.current !== thisRequestId) return;
+
         dispatch({
           type: "UPDATE_LAST_MESSAGE",
           chatId,
+          messageId: assistantMessageId,
           delta: chunk,
         });
       }
+
+      // Final check before finalizing - don't overwrite a newer message
+      if (requestIdRef.current !== thisRequestId) return;
 
       dispatch({
         type: "FINALIZE_MESSAGE",
@@ -533,14 +595,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       // Ignore aborted requests - user started a new message or switched chats
       if (err instanceof Error && err.name === "AbortError") {
+        // Remove the stale placeholder so it doesn't show up as an empty bubble
         dispatch({
-          type: "SET_MESSAGE_ERROR",
+          type: "REMOVE_MESSAGE",
           chatId,
           messageId: assistantMessageId,
-          error: "",
         });
         return;
       }
+      // Stale request errored after being superseded - silently ignore
+      if (requestIdRef.current !== thisRequestId) return;
 
       const errMsg = err instanceof Error ? err.message : "An error occurred";
       const isRateLimit =

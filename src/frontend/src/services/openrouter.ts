@@ -182,13 +182,6 @@ export function selectBestModel(
   return models[0].id;
 }
 
-// System prompt to enforce English responses regardless of model defaults
-const SYSTEM_PROMPT: OpenRouterMessage = {
-  role: "system",
-  content:
-    "You are Panda AI, a helpful assistant. Always respond in English only, regardless of what language the user writes in, unless the user explicitly asks you to respond in a different language. Never switch to Chinese, Japanese, or any other language by default.",
-};
-
 const VISION_ID_PATTERNS = [
   "vision",
   "-vl",
@@ -236,135 +229,172 @@ export function modelSupportsVision(model: Model | undefined): boolean {
   );
 }
 
+// Normalize messages so that array content with no images is collapsed to a plain string.
+// This prevents "request format not supported" errors on text-only models.
+function normalizeMessages(messages: OpenRouterMessage[]): OpenRouterMessage[] {
+  return messages.map((m) => {
+    if (!Array.isArray(m.content)) return m;
+    const parts = m.content as OpenRouterContentPart[];
+    const hasImage = parts.some((p) => p.type === "image_url");
+    if (hasImage) return m;
+    // No images -- collapse to a plain string
+    const text = parts
+      .filter((p) => p.type === "text")
+      .map((p) => p.text ?? "")
+      .join("\n");
+    return { ...m, content: text };
+  });
+}
+
+// Fallback model to use when the selected model rejects the request format
+const FORMAT_FALLBACK_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+
 export async function* streamChat(
   apiKey: string,
   model: string,
   messages: OpenRouterMessage[],
   signal?: AbortSignal,
 ): AsyncGenerator<string> {
-  // Prepend system prompt if not already present
-  const hasSystemMessage = messages.some((m) => m.role === "system");
-  const messagesWithSystem = hasSystemMessage
-    ? messages
-    : [SYSTEM_PROMPT, ...messages];
+  const normalizedMessages = normalizeMessages(messages);
 
-  const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": window.location.origin,
-      "X-Title": "Panda AI",
-    },
-    body: JSON.stringify({
-      model,
-      messages: messagesWithSystem,
-      stream: true,
-    }),
-    signal,
-  });
+  // If the request fails due to format mismatch, retry once with the fallback model
+  let modelToUse = model;
+  let attempt = 0;
 
-  if (!response.ok) {
-    const errorData = (await response.json().catch(() => ({}))) as {
-      error?: { message?: string; code?: number };
-    };
-    const msg = errorData.error?.message || "Unknown API error";
+  while (attempt < 2) {
+    attempt++;
+    const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "Panda AI",
+      },
+      body: JSON.stringify({
+        model: modelToUse,
+        messages: normalizedMessages,
+        stream: true,
+      }),
+      signal,
+    });
 
-    if (response.status === 401) {
-      throw new Error("Invalid API key. Please update your key in Settings.");
-    }
-    if (response.status === 429) {
-      throw new Error(
-        `Rate limit reached for model "${model}". Please switch to a different model or wait a moment.`,
-      );
-    }
-    if (response.status === 402) {
-      throw new Error(
-        "Insufficient credits. Please check your OpenRouter account.",
-      );
-    }
-    if (response.status === 400) {
-      // Check if it's an image-related error
-      if (
-        msg.toLowerCase().includes("image") ||
-        msg.toLowerCase().includes("vision") ||
-        msg.toLowerCase().includes("modality") ||
-        msg.toLowerCase().includes("endpoint")
-      ) {
+    if (!response.ok) {
+      const errorData = (await response.json().catch(() => ({}))) as {
+        error?: { message?: string; code?: number };
+      };
+      const msg = errorData.error?.message || "Unknown API error";
+
+      if (response.status === 400 && attempt === 1) {
+        // Format error: retry with a reliable fallback model
+        const isFormatError =
+          msg.toLowerCase().includes("format") ||
+          msg.toLowerCase().includes("not support") ||
+          msg.toLowerCase().includes("invalid") ||
+          msg.toLowerCase().includes("modality");
+        if (isFormatError && modelToUse !== FORMAT_FALLBACK_MODEL) {
+          modelToUse = FORMAT_FALLBACK_MODEL;
+          continue; // retry with fallback
+        }
+      }
+
+      // Rethrow with a user-friendly error — no retry needed
+      if (response.status === 401) {
+        throw new Error("Invalid API key. Please update your key in Settings.");
+      }
+      if (response.status === 429) {
         throw new Error(
-          `The selected model "${model}" does not support image input. Please switch to a vision-capable model (e.g. Gemini or Llama Vision).`,
+          `Rate limit reached for "${modelToUse}". Please switch to a different model or wait a moment.`,
         );
       }
-      throw new Error(
-        `This model doesn't support the request format. Try a different model.`,
-      );
+      if (response.status === 402) {
+        throw new Error(
+          "Insufficient credits. Please check your OpenRouter account.",
+        );
+      }
+      if (response.status === 400) {
+        if (
+          msg.toLowerCase().includes("image") ||
+          msg.toLowerCase().includes("vision") ||
+          msg.toLowerCase().includes("modality") ||
+          msg.toLowerCase().includes("endpoint")
+        ) {
+          throw new Error(
+            `The selected model "${modelToUse}" does not support image input. Please switch to a vision-capable model (e.g. Gemini or Llama Vision).`,
+          );
+        }
+        throw new Error(
+          `This model doesn't support the request format. Try a different model.`,
+        );
+      }
+      if (response.status === 503 || response.status === 502) {
+        throw new Error(
+          `Model "${modelToUse}" is currently unavailable. Please try a different model.`,
+        );
+      }
+      if (
+        msg.toLowerCase().includes("no endpoints") ||
+        msg.toLowerCase().includes("image input")
+      ) {
+        throw new Error(
+          "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini or Llama Vision).",
+        );
+      }
+      throw new Error(msg);
     }
-    if (response.status === 503 || response.status === 502) {
-      throw new Error(
-        `Model "${model}" is currently unavailable. Please try a different model.`,
-      );
-    }
-    // Check for "no endpoints" type error in the message
-    if (
-      msg.toLowerCase().includes("no endpoints") ||
-      msg.toLowerCase().includes("image input")
-    ) {
-      throw new Error(
-        "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini or Llama Vision).",
-      );
-    }
-    throw new Error(msg);
-  }
 
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+    // Successful response — stream it
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        const data = line.slice(6).trim();
-        if (data === "[DONE]") return;
-        try {
-          const parsed = JSON.parse(data) as {
-            choices?: Array<{ delta?: { content?: string } }>;
-            error?: { message?: string; code?: number };
-          };
-          // Handle error returned inside the stream
-          if (parsed.error) {
-            const errMsg = parsed.error.message || "Unknown error";
-            if (
-              errMsg.toLowerCase().includes("no endpoints") ||
-              errMsg.toLowerCase().includes("image input") ||
-              errMsg.toLowerCase().includes("vision") ||
-              errMsg.toLowerCase().includes("modality")
-            ) {
-              throw new Error(
-                "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini Flash or Llama Vision).",
-              );
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") return;
+          try {
+            const parsed = JSON.parse(data) as {
+              choices?: Array<{ delta?: { content?: string } }>;
+              error?: { message?: string; code?: number };
+            };
+            // Handle error returned inside the stream
+            if (parsed.error) {
+              const errMsg = parsed.error.message || "Unknown error";
+              if (
+                errMsg.toLowerCase().includes("no endpoints") ||
+                errMsg.toLowerCase().includes("image input") ||
+                errMsg.toLowerCase().includes("vision") ||
+                errMsg.toLowerCase().includes("modality")
+              ) {
+                throw new Error(
+                  "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini Flash or Llama Vision).",
+                );
+              }
+              throw new Error(errMsg);
             }
-            throw new Error(errMsg);
-          }
-          const content = parsed.choices?.[0]?.delta?.content;
-          if (content) yield content;
-        } catch (e) {
-          // Re-throw actual errors, skip malformed JSON chunks
-          if (
-            e instanceof Error &&
-            e.message !== "Unexpected end of JSON input"
-          ) {
-            throw e;
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) yield content;
+          } catch (e) {
+            // Re-throw actual errors, skip malformed JSON chunks
+            if (
+              e instanceof Error &&
+              e.message !== "Unexpected end of JSON input"
+            ) {
+              throw e;
+            }
           }
         }
       }
     }
+    return; // done streaming, exit the retry loop
   }
 }
 

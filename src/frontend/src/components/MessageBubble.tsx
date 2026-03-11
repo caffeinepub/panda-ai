@@ -6,6 +6,7 @@ import {
   Image as ImageIcon,
   User,
 } from "lucide-react";
+import { motion } from "motion/react";
 import { useCallback, useMemo, useState } from "react";
 import type { ContentPart, Message } from "../hooks/useChatStore";
 
@@ -22,7 +23,6 @@ function CopyButton({ text }: { text: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // fallback for older browsers
       const el = document.createElement("textarea");
       el.value = text;
       document.body.appendChild(el);
@@ -57,7 +57,6 @@ function CopyButton({ text }: { text: string }) {
 }
 
 // ─── Lightweight Markdown Renderer ───────────────────────────────────────────
-// Parses common markdown patterns without external deps.
 
 interface MarkdownToken {
   type:
@@ -71,11 +70,11 @@ interface MarkdownToken {
     | "paragraph"
     | "blank";
   content: string;
-  level?: number; // for headings
+  level?: number;
   ordered?: boolean;
-  lang?: string; // for code blocks
-  rows?: string[][]; // for tables
-  headers?: string[]; // for tables
+  lang?: string;
+  rows?: string[][];
+  headers?: string[];
 }
 
 function tokenizeMarkdown(md: string): MarkdownToken[] {
@@ -86,7 +85,6 @@ function tokenizeMarkdown(md: string): MarkdownToken[] {
   while (i < lines.length) {
     const line = lines[i];
 
-    // Fenced code block
     if (/^```/.test(line)) {
       const lang = line.slice(3).trim();
       const codeLines: string[] = [];
@@ -95,12 +93,11 @@ function tokenizeMarkdown(md: string): MarkdownToken[] {
         codeLines.push(lines[i]);
         i++;
       }
-      i++; // consume closing ```
+      i++;
       tokens.push({ type: "code_block", content: codeLines.join("\n"), lang });
       continue;
     }
 
-    // Heading
     const headingMatch = /^(#{1,6})\s+(.*)$/.exec(line);
     if (headingMatch) {
       tokens.push({
@@ -112,14 +109,12 @@ function tokenizeMarkdown(md: string): MarkdownToken[] {
       continue;
     }
 
-    // HR
     if (/^[-*_]{3,}\s*$/.test(line)) {
       tokens.push({ type: "hr", content: "" });
       i++;
       continue;
     }
 
-    // Blockquote
     if (/^>\s?/.test(line)) {
       const bqLines: string[] = [];
       while (i < lines.length && /^>\s?/.test(lines[i])) {
@@ -130,7 +125,6 @@ function tokenizeMarkdown(md: string): MarkdownToken[] {
       continue;
     }
 
-    // Unordered list
     if (/^[-*+]\s/.test(line)) {
       const itemLines: string[] = [];
       while (i < lines.length && /^[-*+]\s/.test(lines[i])) {
@@ -143,7 +137,6 @@ function tokenizeMarkdown(md: string): MarkdownToken[] {
       continue;
     }
 
-    // Ordered list
     if (/^\d+\.\s/.test(line)) {
       const itemLines: string[] = [];
       while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
@@ -156,7 +149,6 @@ function tokenizeMarkdown(md: string): MarkdownToken[] {
       continue;
     }
 
-    // Table (pipe-separated)
     if (
       /\|/.test(line) &&
       i + 1 < lines.length &&
@@ -168,7 +160,7 @@ function tokenizeMarkdown(md: string): MarkdownToken[] {
           .split("|")
           .map((c) => c.trim());
       const headers = parseRow(line);
-      i += 2; // skip separator row
+      i += 2;
       const rows: string[][] = [];
       while (i < lines.length && /\|/.test(lines[i])) {
         rows.push(parseRow(lines[i]));
@@ -178,14 +170,12 @@ function tokenizeMarkdown(md: string): MarkdownToken[] {
       continue;
     }
 
-    // Blank line
     if (/^\s*$/.test(line)) {
       tokens.push({ type: "blank", content: "" });
       i++;
       continue;
     }
 
-    // Paragraph – accumulate consecutive non-special lines
     const paraLines: string[] = [];
     while (
       i < lines.length &&
@@ -208,11 +198,9 @@ function tokenizeMarkdown(md: string): MarkdownToken[] {
   return tokens;
 }
 
-// Render inline markdown: bold, italic, inline code, links, strikethrough
 function InlineMarkdown({ text }: { text: string }) {
   const parts = useMemo(() => {
     const result: React.ReactNode[] = [];
-    // Split on inline code first
     const segments = text.split(/(`[^`]+`)/);
     let key = 0;
 
@@ -227,7 +215,6 @@ function InlineMarkdown({ text }: { text: string }) {
           </code>,
         );
       } else {
-        // Process bold/italic/strikethrough/links inside non-code segments
         const inner = seg
           .replace(
             /\[([^\]]+)\]\(([^)]+)\)/g,
@@ -264,8 +251,6 @@ interface MarkdownProps {
 function Markdown({ children, isStreaming }: MarkdownProps) {
   const tokens = useMemo(() => tokenizeMarkdown(children), [children]);
 
-  // Build stable keys using token type + position — position is stable for
-  // a given markdown string (these are never reordered at runtime).
   const makeKey = (type: string, idx: number) => `${type}-${idx}`;
 
   const elements: React.ReactNode[] = [];
@@ -469,7 +454,6 @@ function Markdown({ children, isStreaming }: MarkdownProps) {
     }
   });
 
-  // Flush any trailing list items
   const ulEl = flushUl(tokens.length);
   if (ulEl) elements.push(ulEl);
   const olEl = flushOl(tokens.length + 1);
@@ -488,11 +472,13 @@ function AttachmentPreview({ part }: { part: ContentPart }) {
   if (part.type === "image_url" && part.image_url) {
     return (
       <div className="mt-2 mb-1">
-        <img
-          src={part.image_url.url}
-          alt={part.fileName || "Attached image"}
-          className="max-w-xs max-h-64 rounded-xl object-cover border border-white/20 shadow-sm"
-        />
+        <div className="max-w-xs rounded-xl overflow-hidden border border-black/10 shadow-sm bg-zinc-100">
+          <img
+            src={part.image_url.url}
+            alt={part.fileName || "Attached image"}
+            className="w-full h-auto max-h-64 object-contain block"
+          />
+        </div>
         {part.fileName && (
           <p className="text-xs opacity-70 mt-1 flex items-center gap-1">
             <ImageIcon className="w-3 h-3" />
@@ -505,11 +491,27 @@ function AttachmentPreview({ part }: { part: ContentPart }) {
 
   if (part.type === "document") {
     return (
-      <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-white/10 rounded-lg border border-white/20">
-        <FileText className="w-4 h-4 shrink-0" />
+      <div
+        className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg border"
+        style={{
+          background: "oklch(0.85 0.005 220 / 0.5)",
+          borderColor: "oklch(0.80 0.005 220)",
+        }}
+      >
+        <FileText
+          className="w-4 h-4 shrink-0"
+          style={{ color: "oklch(0.35 0.01 220)" }}
+        />
         <div className="min-w-0">
-          <p className="text-xs font-medium truncate">{part.fileName}</p>
-          <p className="text-xs opacity-70">Document attached</p>
+          <p
+            className="text-xs font-medium truncate"
+            style={{ color: "oklch(0.2 0.01 220)" }}
+          >
+            {part.fileName}
+          </p>
+          <p className="text-xs" style={{ color: "oklch(0.45 0.005 220)" }}>
+            Document attached
+          </p>
         </div>
       </div>
     );
@@ -527,12 +529,9 @@ function MessageContent({ message }: { message: Message }) {
         <p className="text-sm leading-relaxed whitespace-pre-wrap">{content}</p>
       );
     }
-
-    // Assistant message with markdown
     return <Markdown isStreaming={message.isStreaming}>{content}</Markdown>;
   }
 
-  // Content parts
   const textParts = content.filter((p) => p.type === "text");
   const mediaParts = content.filter(
     (p) => p.type === "image_url" || p.type === "document",
@@ -563,11 +562,15 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     minute: "2-digit",
   });
 
-  // Silently skip empty error messages (e.g. from aborted requests)
   if (message.error !== undefined) {
     if (!message.error) return null;
     return (
-      <div className="flex justify-start px-4 mb-4 message-enter">
+      <motion.div
+        className="flex justify-start px-4 mb-4"
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+      >
         <div className="flex items-start gap-3 max-w-[80%] md:max-w-[70%]">
           <div className="w-8 h-8 rounded-full bg-red-50 border border-red-100 flex items-center justify-center shrink-0 mt-0.5">
             <AlertCircle className="w-4 h-4 text-red-500" />
@@ -576,15 +579,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             <p className="text-sm text-red-700 font-medium">{message.error}</p>
           </div>
         </div>
-      </div>
+      </motion.div>
     );
   }
 
   return (
-    <div
-      className={`flex px-4 mb-4 message-enter ${
-        isUser ? "justify-end" : "justify-start"
-      }`}
+    <motion.div
+      className={`flex px-4 mb-4 ${isUser ? "justify-end" : "justify-start"}`}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
       onMouseEnter={() => setShowTime(true)}
       onMouseLeave={() => setShowTime(false)}
     >
@@ -595,11 +599,19 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       >
         {/* Avatar */}
         <div
-          className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-sm ${
+          className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-sm"
+          style={
             isUser
-              ? "bg-teal-600 text-white"
-              : "bg-white border border-border shadow-xs text-lg"
-          }`}
+              ? {
+                  background: "oklch(0.88 0.005 220)",
+                  color: "oklch(0.25 0.01 220)",
+                }
+              : {
+                  background: "white",
+                  border: "1px solid oklch(0.91 0.005 200)",
+                  boxShadow: "0 1px 3px oklch(0 0 0 / 0.06)",
+                }
+          }
         >
           {isUser ? <User className="w-4 h-4" /> : "🐼"}
         </div>
@@ -607,10 +619,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {/* Bubble */}
         <div
           className={`flex-1 rounded-2xl px-4 py-3 ${
-            isUser
-              ? "bg-teal-600 text-white rounded-tr-sm"
-              : "bg-white border border-border shadow-xs rounded-tl-sm"
+            isUser ? "rounded-tr-sm" : "rounded-tl-sm bg-transparent"
           }`}
+          style={
+            isUser
+              ? {
+                  background: "oklch(0.92 0.005 220)",
+                  color: "oklch(0.2 0.01 220)",
+                }
+              : {}
+          }
         >
           <MessageContent message={message} />
 
@@ -637,6 +655,6 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           {timeStr}
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }

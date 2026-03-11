@@ -71,21 +71,35 @@ function ChatItem({ chat, isActive, onSelect, onDelete }: ChatItemProps) {
       type="button"
       className={`group w-full flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-all duration-150 text-left relative ${
         isActive
-          ? "bg-white text-foreground shadow-xs border border-border/60"
-          : "hover:bg-white/60 text-muted-foreground hover:text-foreground border border-transparent"
+          ? "text-white border border-transparent"
+          : "text-[oklch(0.72_0.005_220)] hover:text-white border border-transparent"
       }`}
+      style={isActive ? { background: "oklch(0.28 0.01 220)" } : {}}
+      onMouseEnter={(e) => {
+        if (!isActive) {
+          (e.currentTarget as HTMLButtonElement).style.background =
+            "oklch(0.22 0.01 220)";
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!isActive) {
+          (e.currentTarget as HTMLButtonElement).style.background =
+            "transparent";
+        }
+      }}
       onClick={onSelect}
       aria-pressed={isActive}
     >
       {/* Active indicator bar */}
       {isActive && (
-        <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-teal-500 rounded-full" />
+        <span
+          className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 rounded-full"
+          style={{ background: "oklch(0.58 0.14 195)" }}
+        />
       )}
       <MessageSquare
         className={`w-3.5 h-3.5 shrink-0 transition-colors ${
-          isActive
-            ? "text-teal-600"
-            : "text-muted-foreground/50 group-hover:text-muted-foreground"
+          isActive ? "text-white" : "opacity-50"
         }`}
       />
       <span
@@ -101,7 +115,19 @@ function ChatItem({ chat, isActive, onSelect, onDelete }: ChatItemProps) {
           e.stopPropagation();
           onDelete();
         }}
-        className="shrink-0 opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-muted-foreground/60 hover:text-red-500 hover:bg-red-50 transition-all"
+        className="shrink-0 opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center transition-all"
+        style={{ color: "oklch(0.6 0.005 220)" }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.color = "#f87171";
+          (e.currentTarget as HTMLButtonElement).style.background =
+            "oklch(0.3 0.04 15 / 0.3)";
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.color =
+            "oklch(0.6 0.005 220)";
+          (e.currentTarget as HTMLButtonElement).style.background =
+            "transparent";
+        }}
         aria-label={`Delete chat: ${chat.title}`}
       >
         <Trash2 className="w-3 h-3" />
@@ -119,22 +145,25 @@ export function Sidebar() {
   const sidebarContent = (
     <div
       className="flex flex-col h-full"
-      style={{ background: "oklch(0.955 0.008 200)" }}
+      style={{ background: "oklch(0.13 0.01 220)" }}
     >
-      {/* Header — distinct from main background with subtle teal tint */}
+      {/* Header */}
       <div className="flex items-center justify-between px-4 pt-5 pb-4 shrink-0">
         <div className="flex items-center gap-2.5">
           <div
             className="w-8 h-8 rounded-xl flex items-center justify-center text-lg select-none shrink-0"
-            style={{ background: "oklch(0.58 0.14 195 / 0.12)" }}
+            style={{ background: "oklch(0.22 0.01 220)" }}
           >
             🐼
           </div>
           <div>
-            <span className="font-heading font-bold text-[15px] text-foreground tracking-tight leading-none">
+            <span className="font-heading font-bold text-[15px] tracking-tight leading-none text-white">
               Panda AI
             </span>
-            <p className="text-[10px] text-muted-foreground/70 leading-none mt-0.5">
+            <p
+              className="text-[10px] leading-none mt-0.5"
+              style={{ color: "oklch(0.55 0.005 220)" }}
+            >
               Powered by OpenRouter
             </p>
           </div>
@@ -143,7 +172,19 @@ export function Sidebar() {
         <button
           type="button"
           onClick={() => dispatch({ type: "TOGGLE_SIDEBAR", payload: false })}
-          className="md:hidden w-7 h-7 rounded-lg flex items-center justify-center text-muted-foreground hover:bg-white/70 transition-colors"
+          className="md:hidden w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+          style={{ color: "oklch(0.55 0.005 220)" }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.color = "white";
+            (e.currentTarget as HTMLButtonElement).style.background =
+              "oklch(0.22 0.01 220)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.color =
+              "oklch(0.55 0.005 220)";
+            (e.currentTarget as HTMLButtonElement).style.background =
+              "transparent";
+          }}
           aria-label="Close sidebar"
         >
           <X className="w-4 h-4" />
@@ -152,58 +193,63 @@ export function Sidebar() {
 
       {/* New Chat button */}
       <div className="px-3 pb-3 shrink-0">
-        <button
+        <motion.button
           type="button"
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.97 }}
           onClick={() => {
             createNewChat();
             dispatch({ type: "TOGGLE_SIDEBAR", payload: false });
           }}
-          className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-150 group"
+          className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl font-medium text-sm text-white transition-all duration-150"
           style={{
-            background: "oklch(0.58 0.14 195)",
-            color: "white",
-            boxShadow:
-              "0 1px 3px oklch(0.58 0.14 195 / 0.4), 0 1px 2px oklch(0.58 0.14 195 / 0.2)",
+            background: "oklch(0.22 0.01 220)",
+            border: "1px solid oklch(0.28 0.01 220)",
           }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background =
-              "oklch(0.49 0.12 195)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background =
-              "oklch(0.58 0.14 195)";
-          }}
+          data-ocid="sidebar.primary_button"
         >
           <Plus className="w-4 h-4" />
           New Chat
-        </button>
+        </motion.button>
       </div>
 
       {/* Divider */}
       <div
         className="mx-3 mb-1 border-t"
-        style={{ borderColor: "oklch(0.87 0.01 200)" }}
+        style={{ borderColor: "oklch(0.22 0.01 220)" }}
       />
 
       {/* Chat list */}
       <ScrollArea className="flex-1 px-2 py-1">
         {chats.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center px-4">
+          <div
+            className="flex flex-col items-center justify-center py-12 text-center px-4"
+            data-ocid="sidebar.empty_state"
+          >
             <div
               className="w-10 h-10 rounded-xl flex items-center justify-center mb-3"
-              style={{ background: "oklch(0.58 0.14 195 / 0.08)" }}
+              style={{ background: "oklch(0.22 0.01 220)" }}
             >
-              <MessageSquare className="w-5 h-5 text-teal-500/60" />
+              <MessageSquare
+                className="w-5 h-5"
+                style={{ color: "oklch(0.45 0.005 220)" }}
+              />
             </div>
-            <p className="text-[13px] font-medium text-muted-foreground">
+            <p
+              className="text-[13px] font-medium"
+              style={{ color: "oklch(0.55 0.005 220)" }}
+            >
               No chats yet
             </p>
-            <p className="text-xs text-muted-foreground/50 mt-0.5">
+            <p
+              className="text-xs mt-0.5"
+              style={{ color: "oklch(0.4 0.005 220)" }}
+            >
               Start a new conversation
             </p>
           </div>
         ) : (
-          <div className="pb-2">
+          <div className="pb-2" data-ocid="sidebar.list">
             {DATE_GROUPS.map((group) => {
               const groupChats = groupedChats[group];
               if (!groupChats || groupChats.length === 0) return null;
@@ -211,7 +257,7 @@ export function Sidebar() {
                 <div key={group} className="mb-4">
                   <p
                     className="text-[10px] font-semibold uppercase tracking-widest px-3 pb-1.5"
-                    style={{ color: "oklch(0.52 0.01 240 / 0.5)" }}
+                    style={{ color: "oklch(0.55 0.005 220)" }}
                   >
                     {group}
                   </p>
@@ -244,13 +290,26 @@ export function Sidebar() {
       {/* Bottom settings */}
       <div
         className="mx-3 border-t"
-        style={{ borderColor: "oklch(0.87 0.01 200)" }}
+        style={{ borderColor: "oklch(0.22 0.01 220)" }}
       />
       <div className="p-3 shrink-0">
         <button
           type="button"
           onClick={() => dispatch({ type: "TOGGLE_SETTINGS", payload: true })}
-          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-muted-foreground hover:text-foreground hover:bg-white/70 transition-all duration-150 text-[13px]"
+          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-all duration-150 text-[13px]"
+          style={{ color: "oklch(0.55 0.005 220)" }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.color = "white";
+            (e.currentTarget as HTMLButtonElement).style.background =
+              "oklch(0.22 0.01 220)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.color =
+              "oklch(0.55 0.005 220)";
+            (e.currentTarget as HTMLButtonElement).style.background =
+              "transparent";
+          }}
+          data-ocid="sidebar.secondary_button"
         >
           <Settings className="w-3.5 h-3.5" />
           Settings
@@ -262,7 +321,10 @@ export function Sidebar() {
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden md:flex w-[260px] shrink-0 border-r border-border flex-col h-full">
+      <aside
+        className="hidden md:flex w-[260px] shrink-0 flex-col h-full"
+        style={{ borderRight: "1px solid oklch(0.22 0.01 220)" }}
+      >
         {sidebarContent}
       </aside>
 
@@ -274,7 +336,7 @@ export function Sidebar() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="md:hidden fixed inset-0 bg-black/30 backdrop-blur-sm z-30"
+              className="md:hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-30"
               onClick={() =>
                 dispatch({ type: "TOGGLE_SIDEBAR", payload: false })
               }
@@ -284,7 +346,8 @@ export function Sidebar() {
               animate={{ x: 0 }}
               exit={{ x: -280 }}
               transition={{ type: "spring", damping: 28, stiffness: 300 }}
-              className="md:hidden fixed left-0 top-0 bottom-0 w-[260px] z-40 border-r border-border shadow-modal"
+              className="md:hidden fixed left-0 top-0 bottom-0 w-[260px] z-40 shadow-modal"
+              style={{ borderRight: "1px solid oklch(0.22 0.01 220)" }}
             >
               {sidebarContent}
             </motion.aside>

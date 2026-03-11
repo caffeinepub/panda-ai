@@ -31,7 +31,7 @@ const ACCEPTED_TYPES = [
   "application/msword",
 ].join(",");
 
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 interface AttachedFile {
   file: File;
@@ -124,7 +124,6 @@ export function InputBar() {
     const msgText = text.trim();
     const files = attachedFiles.map((a) => a.file);
 
-    // Ensure a chat is active
     if (!activeChatId) {
       createNewChat();
     }
@@ -132,7 +131,6 @@ export function InputBar() {
     setText("");
     setAttachedFiles([]);
 
-    // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -181,7 +179,6 @@ export function InputBar() {
   };
 
   return (
-    /* Gradient lift — white fades from transparent, giving the input bar visual elevation */
     <div
       className="shrink-0 px-4 pb-4 pt-2"
       style={{
@@ -251,6 +248,7 @@ export function InputBar() {
           }}
           title="Attach file"
           aria-label="Attach image or document"
+          data-ocid="chat.upload_button"
         >
           <Paperclip className="w-4 h-4" />
         </button>
@@ -269,25 +267,26 @@ export function InputBar() {
           disabled={isStreaming}
           rows={1}
           className="flex-1 resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 leading-relaxed overflow-hidden py-1.5"
-          style={{
-            minHeight: "36px",
-            maxHeight: "140px",
-          }}
+          style={{ minHeight: "36px", maxHeight: "140px" }}
           aria-label="Message input"
+          data-ocid="chat.input"
         />
 
-        {/* Send button */}
-        <button
+        {/* Send button — circular */}
+        <motion.button
           type="button"
           onClick={handleSend}
           disabled={!canSend}
-          className="shrink-0 w-8 h-8 mb-0.5 rounded-lg flex items-center justify-center transition-all duration-150"
+          whileHover={canSend ? { scale: 1.05 } : {}}
+          whileTap={canSend ? { scale: 0.95 } : {}}
+          className="shrink-0 w-8 h-8 mb-0.5 rounded-full flex items-center justify-center transition-colors duration-150"
           style={
             canSend
               ? {
                   background: "oklch(0.58 0.14 195)",
                   color: "white",
                   boxShadow: "0 1px 3px oklch(0.58 0.14 195 / 0.4)",
+                  cursor: "pointer",
                 }
               : {
                   background: "oklch(0.93 0.005 200)",
@@ -308,16 +307,17 @@ export function InputBar() {
             }
           }}
           aria-label="Send message"
+          data-ocid="chat.submit_button"
         >
           {isStreaming ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
           ) : (
             <Send className="w-3.5 h-3.5" />
           )}
-        </button>
+        </motion.button>
       </div>
 
-      {/* Hidden file input - visually hidden but accessible */}
+      {/* Hidden file input */}
       <input
         ref={fileInputRef}
         type="file"
