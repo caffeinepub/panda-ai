@@ -1,0 +1,16 @@
+{
+  "name": "Panda AI",
+  "short_name": "Panda AI",
+  "icons": [
+    {
+      "src": "/panda-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "theme_color": "#0f766e",
+  "background_color": "#ffffff",
+  "display": "standalone",
+  "start_url": "/"
+}
