@@ -2,6 +2,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { useCallback, useEffect, useRef } from "react";
 import { APIKeyModal } from "./components/APIKeyModal";
 import { ChatArea } from "./components/ChatArea";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { ChatProvider, useChatStore } from "./hooks/useChatStore";
@@ -64,8 +65,10 @@ function AppInner() {
 
 export default function App() {
   return (
-    <ChatProvider>
-      <AppInner />
-    </ChatProvider>
+    <ErrorBoundary>
+      <ChatProvider>
+        <AppInner />
+      </ChatProvider>
+    </ErrorBoundary>
   );
 }

@@ -106,6 +106,49 @@ function loadFromStorage<T>(key: string, fallback: T): T {
   return fallback;
 }
 
+/**
+ * Strip base64 image data from messages before saving to localStorage.
+ * This prevents QuotaExceededError when images are large.
+ */
+function sanitizeChatsForStorage(chats: ChatSession[]): ChatSession[] {
+  return chats.map((chat) => ({
+    ...chat,
+    messages: chat.messages.map((msg) => {
+      if (!Array.isArray(msg.content)) return msg;
+      const sanitizedParts: ContentPart[] = msg.content.map((part) => {
+        if (
+          part.type === "image_url" &&
+          part.image_url?.url?.startsWith("data:")
+        ) {
+          return {
+            type: "text" as const,
+            text: `[Image: ${part.fileName || "image"}]`,
+          };
+        }
+        return part;
+      });
+      // If all parts are now plain text, collapse to a string
+      const allText = sanitizedParts.every((p) => p.type === "text");
+      if (allText) {
+        return {
+          ...msg,
+          content: sanitizedParts.map((p) => p.text ?? "").join("\n"),
+        };
+      }
+      return { ...msg, content: sanitizedParts };
+    }),
+  }));
+}
+
+function saveChatsToStorage(chats: ChatSession[]): void {
+  try {
+    const sanitized = sanitizeChatsForStorage(chats);
+    localStorage.setItem("panda_chats", JSON.stringify(sanitized));
+  } catch {
+    // Silently ignore QuotaExceededError and other storage errors
+  }
+}
+
 function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case "SET_API_KEY":
@@ -118,7 +161,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case "ADD_CHAT": {
       const newChats = [action.payload, ...state.chats];
-      localStorage.setItem("panda_chats", JSON.stringify(newChats));
+      saveChatsToStorage(newChats);
       return {
         ...state,
         chats: newChats,
@@ -128,7 +171,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case "DELETE_CHAT": {
       const filteredChats = state.chats.filter((c) => c.id !== action.payload);
-      localStorage.setItem("panda_chats", JSON.stringify(filteredChats));
+      saveChatsToStorage(filteredChats);
       return {
         ...state,
         chats: filteredChats,
@@ -148,7 +191,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ? { ...chat, messages: [...chat.messages, action.message] }
           : chat,
       );
-      localStorage.setItem("panda_chats", JSON.stringify(updatedChats));
+      saveChatsToStorage(updatedChats);
       return { ...state, chats: updatedChats };
     }
 
@@ -179,7 +222,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         );
         return { ...chat, messages };
       });
-      localStorage.setItem("panda_chats", JSON.stringify(updatedChats));
+      saveChatsToStorage(updatedChats);
       return { ...state, chats: updatedChats };
     }
 
@@ -193,7 +236,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         );
         return { ...chat, messages };
       });
-      localStorage.setItem("panda_chats", JSON.stringify(updatedChats));
+      saveChatsToStorage(updatedChats);
       return { ...state, chats: updatedChats };
     }
 
@@ -205,7 +248,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
           messages: chat.messages.filter((m) => m.id !== action.messageId),
         };
       });
-      localStorage.setItem("panda_chats", JSON.stringify(updatedChats));
+      saveChatsToStorage(updatedChats);
       return { ...state, chats: updatedChats };
     }
 
@@ -213,7 +256,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const updatedChats = state.chats.map((chat) =>
         chat.id === action.chatId ? { ...chat, title: action.title } : chat,
       );
-      localStorage.setItem("panda_chats", JSON.stringify(updatedChats));
+      saveChatsToStorage(updatedChats);
       return { ...state, chats: updatedChats };
     }
 
@@ -571,6 +614,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         modelToUse,
         apiMessages,
         abortController.signal,
+        hasImage,
       )) {
         // If a newer request has started, stop processing this stale stream immediately
         if (requestIdRef.current !== thisRequestId) return;

@@ -32,7 +32,6 @@ export interface OpenRouterContentPart {
 
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
-// Default fallback models if API fails
 export const FALLBACK_MODELS: Model[] = [
   {
     id: "meta-llama/llama-3.3-70b-instruct:free",
@@ -76,6 +75,9 @@ export const FALLBACK_MODELS: Model[] = [
   },
 ];
 
+const VISION_FALLBACK_MODEL = "google/gemini-2.0-flash-exp:free";
+const FORMAT_FALLBACK_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+
 export async function fetchFreeModels(apiKey: string): Promise<Model[]> {
   const response = await fetch(`${OPENROUTER_BASE}/models`, {
     headers: {
@@ -91,7 +93,6 @@ export async function fetchFreeModels(apiKey: string): Promise<Model[]> {
   const data = (await response.json()) as { data: Model[] };
   const models = data.data || [];
 
-  // Filter free models: pricing.prompt === "0" or id contains ":free"
   const freeModels = models.filter((model) => {
     const isFreeById = model.id.includes(":free");
     const isFreeByPricing =
@@ -99,7 +100,6 @@ export async function fetchFreeModels(apiKey: string): Promise<Model[]> {
     return isFreeById || isFreeByPricing;
   });
 
-  // Sort by context length descending, then by name
   return freeModels.sort((a, b) => {
     if (b.context_length !== a.context_length) {
       return b.context_length - a.context_length;
@@ -153,13 +153,11 @@ export function selectBestModel(
   const hasCodeKeyword = CODE_KEYWORDS.some((kw) => lowerQuery.includes(kw));
   const isLongQuery = query.length > 500;
 
-  // Vision request: prefer multimodal models
   if (hasImage) {
     const visionModel = models.find((m) => modelSupportsVision(m));
     if (visionModel) return visionModel.id;
   }
 
-  // Document analysis or long query: prefer high context
   if (hasDocument || isLongQuery) {
     const highContextModel = models
       .filter((m) => m.context_length >= 100000)
@@ -167,7 +165,6 @@ export function selectBestModel(
     if (highContextModel) return highContextModel.id;
   }
 
-  // Coding request: prefer coding-specialized models
   if (hasCodeKeyword) {
     const codingModel = models.find((m) =>
       CODING_MODEL_KEYWORDS.some(
@@ -178,7 +175,6 @@ export function selectBestModel(
     if (codingModel) return codingModel.id;
   }
 
-  // Default: return the first model (already sorted by context length)
   return models[0].id;
 }
 
@@ -211,7 +207,6 @@ const VISION_ID_PATTERNS = [
   "free-vision",
 ];
 
-// Check if a model supports vision/image input based on its metadata
 export function modelSupportsVision(model: Model | undefined): boolean {
   if (!model) return false;
   const modality = model.architecture?.modality || "";
@@ -229,15 +224,12 @@ export function modelSupportsVision(model: Model | undefined): boolean {
   );
 }
 
-// Normalize messages so that array content with no images is collapsed to a plain string.
-// This prevents "request format not supported" errors on text-only models.
 function normalizeMessages(messages: OpenRouterMessage[]): OpenRouterMessage[] {
   return messages.map((m) => {
     if (!Array.isArray(m.content)) return m;
     const parts = m.content as OpenRouterContentPart[];
     const hasImage = parts.some((p) => p.type === "image_url");
     if (hasImage) return m;
-    // No images -- collapse to a plain string
     const text = parts
       .filter((p) => p.type === "text")
       .map((p) => p.text ?? "")
@@ -246,109 +238,144 @@ function normalizeMessages(messages: OpenRouterMessage[]): OpenRouterMessage[] {
   });
 }
 
-// Fallback model to use when the selected model rejects the request format
-const FORMAT_FALLBACK_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
-
 export async function* streamChat(
   apiKey: string,
   model: string,
   messages: OpenRouterMessage[],
   signal?: AbortSignal,
+  hasImages = false,
 ): AsyncGenerator<string> {
   const normalizedMessages = normalizeMessages(messages);
 
-  // If the request fails due to format mismatch, retry once with the fallback model
+  const triedModels = new Set<string>();
   let modelToUse = model;
-  let attempt = 0;
 
-  while (attempt < 2) {
-    attempt++;
-    const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": window.location.origin,
-        "X-Title": "Panda AI",
-      },
-      body: JSON.stringify({
-        model: modelToUse,
-        messages: normalizedMessages,
-        stream: true,
-      }),
-      signal,
-    });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (triedModels.has(modelToUse)) break;
+    triedModels.add(modelToUse);
+
+    let response: Response;
+    try {
+      response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": window.location.origin,
+          "X-Title": "Panda AI",
+        },
+        body: JSON.stringify({
+          model: modelToUse,
+          messages: normalizedMessages,
+          stream: true,
+        }),
+        signal,
+      });
+    } catch (fetchErr) {
+      if (fetchErr instanceof Error && fetchErr.name === "AbortError")
+        throw fetchErr;
+      throw new Error(
+        "Network error: Could not reach OpenRouter. Please check your internet connection.",
+      );
+    }
 
     if (!response.ok) {
-      const errorData = (await response.json().catch(() => ({}))) as {
-        error?: { message?: string; code?: number };
-      };
-      const msg = errorData.error?.message || "Unknown API error";
-
-      if (response.status === 400 && attempt === 1) {
-        // Format error: retry with a reliable fallback model
-        const isFormatError =
-          msg.toLowerCase().includes("format") ||
-          msg.toLowerCase().includes("not support") ||
-          msg.toLowerCase().includes("invalid") ||
-          msg.toLowerCase().includes("modality");
-        if (isFormatError && modelToUse !== FORMAT_FALLBACK_MODEL) {
-          modelToUse = FORMAT_FALLBACK_MODEL;
-          continue; // retry with fallback
-        }
+      let errorData: { error?: { message?: string; code?: number } } = {};
+      try {
+        errorData = (await response.json()) as typeof errorData;
+      } catch {
+        // ignore
       }
+      const msg =
+        errorData.error?.message || response.statusText || "Unknown API error";
 
-      // Rethrow with a user-friendly error — no retry needed
       if (response.status === 401) {
         throw new Error("Invalid API key. Please update your key in Settings.");
       }
-      if (response.status === 429) {
-        throw new Error(
-          `Rate limit reached for "${modelToUse}". Please switch to a different model or wait a moment.`,
-        );
-      }
+
       if (response.status === 402) {
         throw new Error(
           "Insufficient credits. Please check your OpenRouter account.",
         );
       }
+
+      if (response.status === 429) {
+        throw new Error(
+          `Rate limit reached for "${modelToUse}". Please switch to a different model or wait a moment.`,
+        );
+      }
+
       if (response.status === 400) {
-        if (
+        const isImageError =
           msg.toLowerCase().includes("image") ||
           msg.toLowerCase().includes("vision") ||
           msg.toLowerCase().includes("modality") ||
-          msg.toLowerCase().includes("endpoint")
-        ) {
+          msg.toLowerCase().includes("endpoint") ||
+          msg.toLowerCase().includes("no endpoints");
+
+        if (isImageError) {
+          if (!triedModels.has(VISION_FALLBACK_MODEL)) {
+            modelToUse = VISION_FALLBACK_MODEL;
+            continue;
+          }
           throw new Error(
-            `The selected model "${modelToUse}" does not support image input. Please switch to a vision-capable model (e.g. Gemini or Llama Vision).`,
+            "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini Flash).",
           );
         }
+
+        const isFormatError =
+          msg.toLowerCase().includes("format") ||
+          msg.toLowerCase().includes("not support") ||
+          msg.toLowerCase().includes("invalid") ||
+          msg.toLowerCase().includes("unsupported");
+
+        if (isFormatError && !triedModels.has(FORMAT_FALLBACK_MODEL)) {
+          modelToUse = FORMAT_FALLBACK_MODEL;
+          continue;
+        }
+
         throw new Error(
-          `This model doesn't support the request format. Try a different model.`,
+          "This model doesn't support the request format. Try selecting a different model.",
         );
       }
-      if (response.status === 503 || response.status === 502) {
+
+      // 500 / 502 / 503 — server crashed, retry with a reliable fallback
+      if (
+        response.status === 500 ||
+        response.status === 502 ||
+        response.status === 503
+      ) {
+        const fallback = hasImages
+          ? VISION_FALLBACK_MODEL
+          : FORMAT_FALLBACK_MODEL;
+        if (!triedModels.has(fallback)) {
+          modelToUse = fallback;
+          continue;
+        }
         throw new Error(
-          `Model "${modelToUse}" is currently unavailable. Please try a different model.`,
+          "The AI service is experiencing issues right now. Please try again in a moment or select a different model.",
         );
       }
+
       if (
         msg.toLowerCase().includes("no endpoints") ||
         msg.toLowerCase().includes("image input")
       ) {
         throw new Error(
-          "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini or Llama Vision).",
+          "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini Flash).",
         );
       }
-      throw new Error(msg);
+
+      throw new Error(msg || `Request failed (${response.status}).`);
     }
 
-    // Successful response — stream it
+    // Stream the response
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let streamErrorMsg: string | null = null;
 
-    while (true) {
+    outer: while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -357,44 +384,45 @@ export async function* streamChat(
       buffer = lines.pop() || "";
 
       for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") return;
-          try {
-            const parsed = JSON.parse(data) as {
-              choices?: Array<{ delta?: { content?: string } }>;
-              error?: { message?: string; code?: number };
-            };
-            // Handle error returned inside the stream
-            if (parsed.error) {
-              const errMsg = parsed.error.message || "Unknown error";
-              if (
-                errMsg.toLowerCase().includes("no endpoints") ||
-                errMsg.toLowerCase().includes("image input") ||
-                errMsg.toLowerCase().includes("vision") ||
-                errMsg.toLowerCase().includes("modality")
-              ) {
-                throw new Error(
-                  "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini Flash or Llama Vision).",
-                );
-              }
-              throw new Error(errMsg);
-            }
-            const content = parsed.choices?.[0]?.delta?.content;
-            if (content) yield content;
-          } catch (e) {
-            // Re-throw actual errors, skip malformed JSON chunks
-            if (
-              e instanceof Error &&
-              e.message !== "Unexpected end of JSON input"
-            ) {
-              throw e;
-            }
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6).trim();
+        if (data === "[DONE]") break outer;
+        try {
+          const parsed = JSON.parse(data) as {
+            choices?: Array<{ delta?: { content?: string } }>;
+            error?: { message?: string; code?: number };
+          };
+          if (parsed.error) {
+            const errMsg = parsed.error.message || "Unknown error";
+            const isStreamImageErr =
+              errMsg.toLowerCase().includes("no endpoints") ||
+              errMsg.toLowerCase().includes("image input") ||
+              errMsg.toLowerCase().includes("vision") ||
+              errMsg.toLowerCase().includes("modality");
+            streamErrorMsg = isStreamImageErr
+              ? "The selected model does not support image input. Please switch to a vision-capable model (e.g. Gemini Flash)."
+              : errMsg;
+            break outer;
+          }
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) yield content;
+        } catch (e) {
+          if (
+            e instanceof Error &&
+            !e.message.includes("JSON") &&
+            e.message !== "Unexpected end of JSON input"
+          ) {
+            throw e;
           }
         }
       }
     }
-    return; // done streaming, exit the retry loop
+
+    if (streamErrorMsg) {
+      throw new Error(streamErrorMsg);
+    }
+
+    return; // success
   }
 }
 
@@ -406,18 +434,15 @@ export async function extractTextFromFile(file: File): Promise<string> {
   }
 
   if (ext === "pdf") {
-    // Basic PDF text extraction from raw bytes
     const buffer = await file.arrayBuffer();
     const bytes = new Uint8Array(buffer);
     const text = new TextDecoder("latin1").decode(bytes);
 
-    // Extract text between BT/ET markers (very basic)
     const chunks: string[] = [];
     const btRegex = /BT[\s\S]*?ET/g;
     let match: RegExpExecArray | null = btRegex.exec(text);
     while (match !== null) {
       const block = match[0];
-      // Extract strings from Tj, TJ operators
       const strMatches = block.match(/\(([^)]*)\)\s*Tj/g);
       if (strMatches) {
         for (const s of strMatches) {
@@ -447,10 +472,8 @@ export async function extractTextFromFile(file: File): Promise<string> {
     );
   }
 
-  // For DOCX and other binary formats, try to extract readable text
   try {
     const text = await file.text();
-    // Filter to printable ASCII-ish characters
     const readable = text
       .replace(/[^\x20-\x7E\n\r\t]/g, " ")
       .replace(/\s{3,}/g, " ")
