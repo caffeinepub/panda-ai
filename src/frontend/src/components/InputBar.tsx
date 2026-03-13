@@ -141,6 +141,7 @@ export function InputBar() {
   const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     processFiles(files);
+    // Reset so the same file can be selected again
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -225,25 +226,25 @@ export function InputBar() {
             : "0 2px 8px oklch(0 0 0 / 0.05), 0 1px 2px oklch(0 0 0 / 0.04)",
         }}
       >
-        {/* Attach button */}
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isStreaming}
-          className="shrink-0 w-8 h-8 mb-0.5 rounded-lg flex items-center justify-center transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
+        {/* Attach button — using <label> so it works as a direct gesture on mobile PWA */}
+        <label
+          htmlFor="panda-file-input"
+          className={`shrink-0 w-8 h-8 mb-0.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer select-none ${
+            isStreaming ? "opacity-40 pointer-events-none" : ""
+          }`}
           style={{ color: "oklch(0.55 0.01 240)" }}
           onMouseEnter={(e) => {
             if (!isStreaming) {
-              (e.currentTarget as HTMLButtonElement).style.color =
+              (e.currentTarget as HTMLLabelElement).style.color =
                 "oklch(0.58 0.14 195)";
-              (e.currentTarget as HTMLButtonElement).style.background =
+              (e.currentTarget as HTMLLabelElement).style.background =
                 "oklch(0.97 0.02 195)";
             }
           }}
           onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.color =
+            (e.currentTarget as HTMLLabelElement).style.color =
               "oklch(0.55 0.01 240)";
-            (e.currentTarget as HTMLButtonElement).style.background =
+            (e.currentTarget as HTMLLabelElement).style.background =
               "transparent";
           }}
           title="Attach file"
@@ -251,7 +252,7 @@ export function InputBar() {
           data-ocid="chat.upload_button"
         >
           <Paperclip className="w-4 h-4" />
-        </button>
+        </label>
 
         {/* Textarea */}
         <textarea
@@ -317,9 +318,10 @@ export function InputBar() {
         </motion.button>
       </div>
 
-      {/* Hidden file input */}
+      {/* Hidden file input — id links to the label above for direct-gesture PWA support */}
       <input
         ref={fileInputRef}
+        id="panda-file-input"
         type="file"
         accept={ACCEPTED_TYPES}
         multiple

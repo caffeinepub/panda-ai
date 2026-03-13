@@ -108,6 +108,7 @@ function ChatItem({ chat, isActive, onSelect, onDelete }: ChatItemProps) {
         {chat.title}
       </span>
 
+      {/* Delete button — always visible on mobile, hover-reveal on desktop */}
       <button
         type="button"
         tabIndex={0}
@@ -115,7 +116,7 @@ function ChatItem({ chat, isActive, onSelect, onDelete }: ChatItemProps) {
           e.stopPropagation();
           onDelete();
         }}
-        className="shrink-0 opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center transition-all"
+        className="shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center transition-all"
         style={{ color: "oklch(0.6 0.005 220)" }}
         onMouseEnter={(e) => {
           (e.currentTarget as HTMLButtonElement).style.color = "#f87171";
